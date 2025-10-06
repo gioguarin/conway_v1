@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rand::Rng;
 use ratatui::{
   Terminal,
   buffer::Buffer,
@@ -10,18 +11,43 @@ use ratatui::{
   widgets::Widget,
 };
 use std::{
+  env::args,
   io::Stdout,
   ops::{ControlFlow, Index, IndexMut},
   thread::sleep,
   time::{Duration, Instant},
 };
 
+const HELP: &str = "-help-
+controls:
+  move cursor: arrow keys
+  activate cell: spacebar
+  change speed:
+    slower = [
+    faster = ]
+  pause: p
+flags:
+  -r/--random: enable random activations
+control + c to exit";
+
 fn main() {
+  let mut random = false;
+  if let Some(arg) = args().nth(1) {
+    match arg.as_str() {
+      "-h" | "--help" => return println!("{}", HELP),
+      "-r" | "--random" => random = true,
+      _ => {}
+    }
+  }
+
   let mut term = ratatui::init();
   let mut state = State::new(term.size().unwrap());
 
-  let result = state.run(&mut term);
+  if random {
+    state.paused = false
+  }
 
+  let result = state.run(&mut term, random);
   ratatui::restore();
 
   if let Err(e) = result {
@@ -48,7 +74,7 @@ impl State {
     }
   }
 
-  fn run(&mut self, term: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+  fn run(&mut self, term: &mut Terminal<CrosstermBackend<Stdout>>, random: bool) -> Result<()> {
     let frame_rate = Duration::from_secs_f64(1. / 60.);
     let mut accumulator = Duration::ZERO;
     let mut last_frame = Instant::now();
@@ -66,6 +92,9 @@ impl State {
         accumulator += delta;
         while accumulator >= tick_rate {
           self.update();
+          if random {
+            self.spawn_random_pattern();
+          }
           accumulator -= tick_rate;
         }
       }
@@ -82,12 +111,14 @@ impl State {
   }
 
   fn handle_events(&mut self) -> Result<ControlFlow<()>> {
-    let (c_col, c_row) = (&mut self.cursor.col, &mut self.cursor.row);
-    let (max_cols, max_rows) = (self.grid.cols(), self.grid.rows());
     Ok(ControlFlow::Continue(while poll(Duration::default())? {
       let event = read()?;
       if let Event::Resize(cols, rows) = event {
-        self.grid.resize(rows, cols)
+        self.grid.resize(rows.into(), cols.into());
+        self.cursor = Cursor::new(Size {
+          width: cols,
+          height: rows,
+        })
       }
       if let Event::Key(KeyEvent {
         code,
@@ -99,6 +130,8 @@ impl State {
         if (code, modifiers) == (KeyCode::Char('c'), KeyModifiers::CONTROL) {
           return Ok(ControlFlow::Break(()));
         }
+        let (c_col, c_row) = (&mut self.cursor.col, &mut self.cursor.row);
+        let (max_cols, max_rows) = (self.grid.cols(), self.grid.rows());
         match code {
           KeyCode::Left => *c_col = (*c_col + max_cols - 1) % max_cols,
           KeyCode::Right => *c_col = (*c_col + 1) % max_cols,
@@ -130,19 +163,11 @@ impl State {
               continue;
             }
 
-            let nr = (r as isize)
-              .checked_add(dr)
-              .and_then(|v| usize::try_from(v).ok());
-            let nc = (c as isize)
-              .checked_add(dc)
-              .and_then(|v| usize::try_from(v).ok());
+            let nr = ((r as isize + dr).rem_euclid(self.grid.rows() as isize)) as usize;
+            let nc = ((c as isize + dc).rem_euclid(self.grid.cols() as isize)) as usize;
 
-            if let (Some(nr), Some(nc)) = (nr, nc) {
-              if let Some(cell) = self.grid.get((nr, nc)) {
-                if *cell {
-                  neighbors += 1;
-                }
-              }
+            if self.grid[(nr, nc)] {
+              neighbors += 1;
             }
           }
         }
@@ -157,6 +182,41 @@ impl State {
     }
 
     self.grid = next;
+  }
+
+  fn spawn_random_pattern(&mut self) {
+    let mut rng = rand::thread_rng();
+
+    if rng.gen_range(0..10) != 0 {
+      return;
+    }
+
+    let pattern = match rng.gen_range(0..6) {
+      0 => Pattern::Glider,
+      1 => Pattern::Blinker,
+      2 => Pattern::Toad,
+      3 => Pattern::Beacon,
+      4 => Pattern::Pulsar,
+      _ => Pattern::LightweightSpaceship,
+    };
+
+    let row = rng.gen_range(0..self.grid.rows().saturating_sub(15));
+    let col = rng.gen_range(0..self.grid.cols().saturating_sub(15));
+
+    self.place_pattern(pattern, row, col);
+  }
+
+  fn place_pattern(&mut self, pattern: Pattern, start_row: usize, start_col: usize) {
+    let cells = pattern.cells();
+
+    for (dr, dc) in cells {
+      let r = start_row + dr;
+      let c = start_col + dc;
+
+      if r < self.grid.rows() && c < self.grid.cols() {
+        self.grid[(r, c)] = true;
+      }
+    }
   }
 }
 
@@ -200,13 +260,17 @@ impl Grid {
     self.cols
   }
 
-  fn get(&self, (row, col): (usize, usize)) -> Option<&bool> {
-    self.data.get(row * self.cols + col)
-  }
+  fn resize(&mut self, rows: usize, cols: usize) {
+    let mut data = vec![false; rows * cols];
 
-  fn resize(&mut self, rows: u16, cols: u16) {
-    self.data.resize(rows.into(), false);
-    self.cols = cols.into();
+    for r in 0..self.rows().min(rows) {
+      for c in 0..self.cols().min(cols) {
+        data[r * cols + c] = self.data[r * self.cols() + c];
+      }
+    }
+
+    self.data = data;
+    self.cols = cols;
   }
 }
 
@@ -275,5 +339,86 @@ impl From<TickRate> for Duration {
       TickRate::Normal => 1. / 5.,
       TickRate::Fast => 1. / 10.,
     })
+  }
+}
+
+enum Pattern {
+  Glider,
+  Blinker,
+  Toad,
+  Beacon,
+  Pulsar,
+  LightweightSpaceship,
+}
+
+impl Pattern {
+  fn cells(&self) -> Vec<(usize, usize)> {
+    match self {
+      Pattern::Glider => vec![(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)],
+      Pattern::Blinker => vec![(1, 0), (1, 1), (1, 2)],
+      Pattern::Toad => vec![(1, 1), (1, 2), (1, 3), (2, 0), (2, 1), (2, 2)],
+      Pattern::Beacon => vec![(0, 0), (0, 1), (1, 0), (2, 3), (3, 2), (3, 3)],
+      Pattern::Pulsar => vec![
+        (0, 2),
+        (0, 3),
+        (0, 4),
+        (0, 8),
+        (0, 9),
+        (0, 10),
+        (2, 0),
+        (2, 5),
+        (2, 7),
+        (2, 12),
+        (3, 0),
+        (3, 5),
+        (3, 7),
+        (3, 12),
+        (4, 0),
+        (4, 5),
+        (4, 7),
+        (4, 12),
+        (5, 2),
+        (5, 3),
+        (5, 4),
+        (5, 8),
+        (5, 9),
+        (5, 10),
+        (7, 2),
+        (7, 3),
+        (7, 4),
+        (7, 8),
+        (7, 9),
+        (7, 10),
+        (8, 0),
+        (8, 5),
+        (8, 7),
+        (8, 12),
+        (9, 0),
+        (9, 5),
+        (9, 7),
+        (9, 12),
+        (10, 0),
+        (10, 5),
+        (10, 7),
+        (10, 12),
+        (12, 2),
+        (12, 3),
+        (12, 4),
+        (12, 8),
+        (12, 9),
+        (12, 10),
+      ],
+      Pattern::LightweightSpaceship => vec![
+        (0, 1),
+        (0, 4),
+        (1, 0),
+        (2, 0),
+        (2, 4),
+        (3, 0),
+        (3, 1),
+        (3, 2),
+        (3, 3),
+      ],
+    }
   }
 }
