@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Conway Background
+Comment=Animated Conway's Game of Life background
+Exec=/home/riot/conway-wallpaper.sh
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true

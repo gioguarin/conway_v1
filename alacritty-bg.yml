@@ -1,0 +1,32 @@
+window:
+  opacity: 0.5
+  decorations: none
+  startup_mode: Fullscreen
+  padding:
+    x: 0
+    y: 0
+
+font:
+  size: 4.0
+  normal:
+    family: monospace
+
+colors:
+  primary:
+    background: '#000000'
+    foreground: '#00ff00'
+
+  normal:
+    black:   '#000000'
+    red:     '#ff0000'
+    green:   '#00ff00'
+    yellow:  '#ffff00'
+    blue:    '#0000ff'
+    magenta: '#ff00ff'
+    cyan:    '#00ffff'
+    white:   '#ffffff'
+
+cursor:
+  style:
+    shape: Block
+    blinking: Never
